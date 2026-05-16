@@ -37,6 +37,44 @@ def __getattr__(name: str):
 
 __all__ = list(_lazy_exports.keys())
 
+
+def _install_localhost_allowlist() -> None:
+    """Restrict outbound urllib calls to localhost by default.
+
+    Override with MNEMOSYNE_ALLOWED_HOSTS as comma-separated hostnames/IPs.
+    """
+    import os
+    import urllib.request
+    from urllib.parse import urlparse
+
+    allowed = {
+        h.strip().lower()
+        for h in os.environ.get("MNEMOSYNE_ALLOWED_HOSTS", "localhost,127.0.0.1,::1").split(",")
+        if h.strip()
+    }
+    if not allowed:
+        allowed = {"localhost", "127.0.0.1", "::1"}
+
+    if getattr(urllib.request.urlopen, "_mnemosyne_guarded", False):
+        return
+
+    _orig_urlopen = urllib.request.urlopen
+
+    def _guarded_urlopen(url, *args, **kwargs):
+        target = url.full_url if hasattr(url, "full_url") else str(url)
+        host = (urlparse(target).hostname or "").lower().strip()
+        if host not in allowed:
+            raise ValueError(
+                f"Outbound host '{host}' blocked by MNEMOSYNE_ALLOWED_HOSTS={sorted(allowed)}"
+            )
+        return _orig_urlopen(url, *args, **kwargs)
+
+    _guarded_urlopen._mnemosyne_guarded = True  # type: ignore[attr-defined]
+    urllib.request.urlopen = _guarded_urlopen
+
+
+_install_localhost_allowlist()
+
 # Conditionally expose MCP server if mcp package is installed
 try:
     import mcp
